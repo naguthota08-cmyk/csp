@@ -14,19 +14,23 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 def resolve_database_uri(db_engine, db_user, db_password, db_host, db_port, db_name, sqlite_path):
     """
-    Constructs MySQL 8 URI. If MySQL is unreachable on specified host:port,
-    smoothly falls back to SQLite for local development and test stability.
+    Constructs database URI. Supports custom DATABASE_URL (MySQL/PostgreSQL)
+    with automatic postgres:// -> postgresql:// fix.
+    Falls back to SQLite for local development and zero-config deployment.
     """
     custom_url = os.environ.get("DATABASE_URL")
-    if custom_url:
-        return custom_url
+    if custom_url and custom_url.strip():
+        url = custom_url.strip()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        return url
 
     if db_engine == "sqlite":
         return f"sqlite:///{sqlite_path}"
 
     mysql_uri = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?charset=utf8mb4"
 
-    # Quick port probe (1 second timeout)
+    # Quick port probe (0.8s timeout) to verify MySQL server is actually reachable
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.8)
@@ -37,7 +41,7 @@ def resolve_database_uri(db_engine, db_user, db_password, db_host, db_port, db_n
                 # Fall back to SQLite
                 return f"sqlite:///{sqlite_path}"
     except Exception:
-        return mysql_uri
+        return f"sqlite:///{sqlite_path}"
 
 class Config:
     # Flask Core

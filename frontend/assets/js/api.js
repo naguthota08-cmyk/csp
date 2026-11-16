@@ -1,848 +1,952 @@
 /**
- * SMART POULTRY HEALTH MONITORING & DISEASE-RISK PREDICTION SYSTEM
- * Data Persistence & Mock REST API Service (api.js)
- * Clean user-entry format with dynamic state calculations and LocalStorage CRUD
+ * SMART POULTRY FARM MANAGEMENT AND MONITORING SYSTEM
+ * Real Database REST API Service (api.js)
+ * Connects directly to Flask backend endpoints with JWT Bearer & Session Auth
+ * Supports Full CRUD for all 18 modules with real database persistence
  */
 
-const STORAGE_KEYS = {
-  FARMS: 'smart_poultry_farms',
-  BATCHES: 'smart_poultry_batches',
-  CONDITIONS: 'smart_poultry_conditions',
-  PREDICTIONS: 'smart_poultry_predictions',
-  ALERTS: 'smart_poultry_alerts',
-  VACCINATIONS: 'smart_poultry_vaccinations',
-  CURRENT_FARM: 'smart_poultry_selected_farm',
-  USER_PROFILE: 'smart_poultry_user',
-  EGGS: 'smart_poultry_eggs',
-  MARKET: 'smart_poultry_market_listings',
-  HYGIENE: 'smart_poultry_hygiene_audits',
-  GEO_STRUCTURE: 'smart_poultry_farm_geo',
-  SCAN_HISTORY: 'smart_poultry_scan_history',
-  INITIALIZED: 'smart_poultry_initialized_v2'
-};
-
-// Initial Seed Data (Available if user clicks "Load Sample Demo Data")
-const SAMPLE_DEMO_DATA = {
-  farms: [
-    {
-      id: 'F-001',
-      name: 'GreenValley Broiler Farm',
-      location: 'Punjab Agro Zone, Block 4',
-      birdType: 'Broiler (Cobb 500)',
-      capacity: 6000,
-      currentBirds: 5000,
-      farmSize: '3.5 Acres (4 Sheds)',
-      establishedDate: '2025-04-15',
-      healthScore: 82,
-      riskLevel: 'Medium',
-      mortalityRate: 1.2
-    }
-  ],
-  batches: [
-    {
-      id: 'B-101',
-      farmId: 'F-001',
-      name: 'Batch B-101 (Shed 1)',
-      birdType: 'Broiler (Cobb 500)',
-      birdCount: 2500,
-      ageDays: 28,
-      startDate: '2026-08-03',
-      healthStatus: 'Good',
-      riskLevel: 'Low',
-      avgWeightKg: 1.45,
-      dailyFeedKg: 220,
-      dailyWaterL: 420,
-      mortalityCount: 2
-    },
-    {
-      id: 'B-102',
-      farmId: 'F-001',
-      name: 'Batch B-102 (Shed 2)',
-      birdType: 'Broiler (Ross 308)',
-      birdCount: 2500,
-      ageDays: 31,
-      startDate: '2026-07-31',
-      healthStatus: 'Monitor',
-      riskLevel: 'Medium',
-      avgWeightKg: 1.68,
-      dailyFeedKg: 230,
-      dailyWaterL: 430,
-      mortalityCount: 5
-    }
-  ],
-  alerts: [
-    {
-      id: 'ALT-101',
-      farmId: 'F-001',
-      batchId: 'B-102',
-      batchName: 'Batch B-102 (Shed 2)',
-      severity: 'Critical',
-      title: 'High Mortality & Lethargy Detected',
-      description: 'Recorded 5 bird mortalities with lethargy signs in 24 hours. Immediate isolation recommended.',
-      timestamp: 'Today, 08:30 AM',
-      isRead: false
-    }
-  ],
-  vaccinations: [
-    {
-      id: 'VAC-001',
-      batchId: 'B-101',
-      batchName: 'Batch B-101 (Shed 1)',
-      vaccineName: 'Newcastle Disease (ND Lasota)',
-      route: 'Drinking Water',
-      dateGiven: '2026-08-10',
-      nextDueDate: '2026-09-02',
-      status: 'Upcoming',
-      notes: 'Ensure clean chlorine-free water with skimmed milk stabilizer'
-    }
-  ],
-  predictions: [],
-  user: {
-    fullName: 'Robert Sterling',
-    email: 'farmer@poultrysmart.com',
-    phone: '+1 (555) 234-8901',
-    farmName: 'My Poultry Farm',
-    location: 'Punjab Agro Zone',
-    role: 'Farm Owner & Operator',
-    memberSince: 'August 2026'
-  }
-};
-
-// Initialize Storage: Starts with Clean Empty State by default so user can add fresh data
-function initializeStorage() {
-  if (!localStorage.getItem(STORAGE_KEYS.INITIALIZED)) {
-    // Start clean with empty collections
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.CONDITIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.VACCINATIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify({
-      fullName: 'Farmer User',
-      email: 'farmer@poultrysmart.com',
-      phone: '+1 (555) 000-0000',
-      farmName: 'My Poultry Farm',
-      location: 'Main Location',
-      role: 'Farm Operator',
-      memberSince: 'August 2026'
-    }));
-    localStorage.setItem(STORAGE_KEYS.CURRENT_FARM, '');
-    localStorage.setItem(STORAGE_KEYS.INITIALIZED, 'true');
-  }
-}
-
-// Run init
-initializeStorage();
-
-const API_BASE_URL = window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000';
+const API_BASE_URL = (typeof window !== 'undefined' && window.API_BASE_URL)
+  ? window.API_BASE_URL
+  : (window.location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:5000');
 
 function getAuthHeaders() {
   const token = localStorage.getItem('smart_poultry_jwt_token');
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  };
   if (token) {
     headers['Authorization'] = 'Bearer ' + token;
   }
   return headers;
 }
 
-// Mock API Object
+// Global fetch wrapper with error handling and credentials
+async function apiFetch(endpoint, options = {}) {
+  const url = `${API_BASE_URL}${endpoint}`;
+  const defaultOptions = {
+    headers: getAuthHeaders(),
+    credentials: 'include'
+  };
+
+  const merged = {
+    ...defaultOptions,
+    ...options,
+    headers: {
+      ...defaultOptions.headers,
+      ...(options.headers || {})
+    }
+  };
+
+  try {
+    const res = await fetch(url, merged);
+    if (res.status === 401) {
+      // User session expired or unauthenticated
+      console.warn(`[API] 401 Unauthorized on ${endpoint}`);
+      if (!window.location.pathname.endsWith('login.html') &&
+          !window.location.pathname.endsWith('register.html') &&
+          !window.location.pathname.endsWith('overview.html') &&
+          !window.location.pathname.endsWith('index.html')) {
+        // Only redirect on protected pages
+        setTimeout(() => {
+          window.location.href = 'login.html';
+        }, 1200);
+      }
+    }
+    return res;
+  } catch (err) {
+    console.error(`[API Network Error] ${url}:`, err);
+    throw err;
+  }
+}
+
+// Core API Controller (Exposed as MockAPI for 100% backward compatibility with all UI templates)
 const MockAPI = {
-  delay: (ms = 150) => new Promise(resolve => setTimeout(resolve, ms)),
+  selectedFarmId: localStorage.getItem('smart_poultry_selected_farm') || null,
 
-  // --- RESET & DEMO ACTIONS ---
-  clearAllUserData() {
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.CONDITIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.VACCINATIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.SCAN_HISTORY, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.CURRENT_FARM, '');
-  },
-
-  loadSampleDemoData() {
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(SAMPLE_DEMO_DATA.farms));
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(SAMPLE_DEMO_DATA.batches));
-    localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(SAMPLE_DEMO_DATA.alerts));
-    localStorage.setItem(STORAGE_KEYS.VACCINATIONS, JSON.stringify(SAMPLE_DEMO_DATA.vaccinations));
-    localStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(SAMPLE_DEMO_DATA.predictions));
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(SAMPLE_DEMO_DATA.user));
-    localStorage.setItem(STORAGE_KEYS.CURRENT_FARM, 'F-001');
-  },
-
-  // --- DYNAMIC DASHBOARD SUMMARY ---
-  async getDashboardSummary() {
-    await this.delay(50);
-    const farms = await this.getFarms();
-    const batches = await this.getBatches();
-    const alerts = await this.getAlerts();
-
-    const totalBirds = batches.reduce((sum, b) => sum + (parseInt(b.birdCount) || 0), 0);
-    const totalDailyFeed = batches.reduce((sum, b) => sum + (parseFloat(b.dailyFeedKg) || 0), 0);
-    const totalDailyWater = batches.reduce((sum, b) => sum + (parseFloat(b.dailyWaterL) || 0), 0);
-    const totalMortality = batches.reduce((sum, b) => sum + (parseInt(b.mortalityCount) || 0), 0);
-
-    const mortalityRate = totalBirds > 0 ? ((totalMortality / totalBirds) * 100).toFixed(2) : '0.00';
-
-    // Calculate health score & risk based on batches
-    let healthScore = 100;
-    let riskLevel = 'Low';
-
-    if (batches.length === 0) {
-      healthScore = 100;
-      riskLevel = 'Low';
-    } else {
-      const hasHighRisk = batches.some(b => b.riskLevel === 'High');
-      const hasMedRisk = batches.some(b => b.riskLevel === 'Medium');
-
-      if (hasHighRisk) {
-        healthScore = 65;
-        riskLevel = 'High';
-      } else if (hasMedRisk) {
-        healthScore = 78;
-        riskLevel = 'Medium';
-      } else {
-        healthScore = 95;
-        riskLevel = 'Low';
-      }
-    }
-
-    return {
-      farmsCount: farms.length,
-      activeBatchesCount: batches.length,
-      totalBirds,
-      totalDailyFeed,
-      totalDailyWater,
-      totalMortality,
-      mortalityRate,
-      healthScore,
-      riskLevel,
-      alertsCount: alerts.filter(a => !a.isRead).length
-    };
-  },
-
-  // --- FARMS API ---
-  async getFarms() {
-    await this.delay(50);
-    const token = localStorage.getItem('smart_poultry_jwt_token');
-    if (token) {
-      try {
-        const res = await fetch(API_BASE_URL + '/api/farms', { headers: getAuthHeaders() });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'success' && Array.isArray(data.farms)) {
-            const mappedFarms = data.farms.map(f => ({
-              id: String(f.id),
-              name: f.farm_name,
-              location: f.location || 'Agro Zone',
-              birdType: f.farm_type || 'Broiler',
-              capacity: f.total_capacity || 5000,
-              currentBirds: 0,
-              farmSize: f.address || 'Main Facility',
-              establishedDate: (f.created_at || '').split('T')[0],
-              healthScore: 95,
-              riskLevel: 'Low',
-              mortalityRate: 0.0
-            }));
-            localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(mappedFarms));
-            return mappedFarms;
-          }
-        }
-      } catch (err) {
-        console.warn('Network call /api/farms failed, falling back to local cache', err);
-      }
-    }
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.FARMS) || '[]');
-  },
-
-  async getFarmById(id) {
-    const farms = await this.getFarms();
-    return farms.find(f => f.id === id) || null;
-  },
-
-  async addFarm(farmData) {
-    await this.delay(100);
-    const token = localStorage.getItem('smart_poultry_jwt_token');
-    if (token) {
-      try {
-        const res = await fetch(API_BASE_URL + '/api/farms/create', {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            farm_name: farmData.name,
-            location: farmData.location,
-            farm_type: farmData.birdType || 'Broiler',
-            total_capacity: parseInt(farmData.capacity) || 5000
-          })
-        });
-        if (res.ok) {
-          const result = await res.json();
-          const serverFarm = result.farm || {};
-          const newFarm = {
-            id: String(serverFarm.id || Date.now()),
-            name: serverFarm.farm_name || farmData.name,
-            location: serverFarm.location || farmData.location,
-            birdType: serverFarm.farm_type || farmData.birdType || 'Broiler',
-            capacity: serverFarm.total_capacity || farmData.capacity || 5000,
-            currentBirds: 0,
-            farmSize: farmData.farmSize || 'Main Facility',
-            establishedDate: new Date().toISOString().split('T')[0],
-            healthScore: 95,
-            riskLevel: 'Low',
-            mortalityRate: 0.0,
-            activeBatchesCount: 0
-          };
-          const farms = JSON.parse(localStorage.getItem(STORAGE_KEYS.FARMS) || '[]');
-          farms.unshift(newFarm);
-          localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(farms));
-          if (!this.getSelectedFarmId()) {
-            this.setSelectedFarmId(newFarm.id);
-          }
-          return newFarm;
-        }
-      } catch (err) {
-        console.warn('Network call /api/farms/create failed, falling back to local', err);
-      }
-    }
-    const farms = await this.getFarms();
-    const newFarm = {
-      id: 'F-' + String(farms.length + 1).padStart(3, '0'),
-      healthScore: 95,
-      riskLevel: 'Low',
-      mortalityRate: 0.0,
-      activeBatchesCount: 0,
-      ...farmData
-    };
-    farms.unshift(newFarm);
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(farms));
-    if (!this.getSelectedFarmId()) {
-      this.setSelectedFarmId(newFarm.id);
-    }
-    return newFarm;
-  },
-
-  async updateFarm(id, updatedData) {
-    await this.delay(100);
-    let farms = await this.getFarms();
-    farms = farms.map(f => f.id === id ? { ...f, ...updatedData } : f);
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(farms));
-    return farms.find(f => f.id === id);
-  },
-
-  async deleteFarm(id) {
-    await this.delay(100);
-    let farms = await this.getFarms();
-    farms = farms.filter(f => f.id !== id);
-    localStorage.setItem(STORAGE_KEYS.FARMS, JSON.stringify(farms));
-    // Also remove associated batches
-    let batches = await this.getBatches();
-    batches = batches.filter(b => b.farmId !== id);
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-    return { success: true };
-  },
-
-  // --- BATCHES API ---
-  async getBatches(farmId = null) {
-    await this.delay(50);
-    const token = localStorage.getItem('smart_poultry_jwt_token');
-    if (token) {
-      try {
-        const url = farmId ? `/api/flocks?farm_id=${farmId}` : '/api/flocks';
-        const res = await fetch(API_BASE_URL + url, { headers: getAuthHeaders() });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'success' && Array.isArray(data.flocks)) {
-            const mappedBatches = data.flocks.map(f => ({
-              id: String(f.id),
-              farmId: String(f.farm_id),
-              name: f.batch_number || ('Batch ' + f.id),
-              birdType: f.bird_type || 'Broiler',
-              birdCount: f.current_bird_count || f.initial_bird_count,
-              initialBirdCount: f.initial_bird_count,
-              startDate: f.arrival_date,
-              healthStatus: f.status === 'active' ? 'Good' : f.status,
-              riskLevel: 'Low',
-              avgWeightKg: parseFloat(f.target_weight_kg) || 1.5,
-              dailyFeedKg: Math.round((f.current_bird_count || 1000) * 0.08),
-              dailyWaterL: Math.round((f.current_bird_count || 1000) * 0.16),
-              mortalityCount: 0
-            }));
-            localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(mappedBatches));
-            if (farmId) {
-              return mappedBatches.filter(b => b.farmId === String(farmId));
-            }
-            return mappedBatches;
-          }
-        }
-      } catch (err) {
-        console.warn('Network call /api/flocks failed, falling back to local cache', err);
-      }
-    }
-    const batches = JSON.parse(localStorage.getItem(STORAGE_KEYS.BATCHES) || '[]');
-    if (farmId) {
-      return batches.filter(b => b.farmId === farmId);
-    }
-    return batches;
-  },
-
-  async addBatch(batchData) {
-    await this.delay(100);
-    const token = localStorage.getItem('smart_poultry_jwt_token');
-    if (token) {
-      try {
-        const res = await fetch(API_BASE_URL + '/api/flocks/create', {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            farm_id: parseInt(batchData.farmId) || 1,
-            batch_number: batchData.name || ('Batch-' + Date.now().toString().slice(-4)),
-            bird_type: batchData.birdType || 'Broiler',
-            breed: batchData.breed || 'Cobb 500',
-            initial_bird_count: parseInt(batchData.birdCount) || 1000,
-            arrival_date: batchData.startDate || new Date().toISOString().split('T')[0],
-            target_weight_kg: parseFloat(batchData.avgWeightKg) || 2.0
-          })
-        });
-        if (res.ok) {
-          const result = await res.json();
-          const serverFlock = result.flock || {};
-          const newBatch = {
-            id: String(serverFlock.id || Date.now()),
-            farmId: String(serverFlock.farm_id || batchData.farmId),
-            name: serverFlock.batch_number || batchData.name,
-            birdType: serverFlock.bird_type || batchData.birdType || 'Broiler',
-            birdCount: serverFlock.current_bird_count || batchData.birdCount,
-            healthStatus: 'Good',
-            riskLevel: 'Low',
-            avgWeightKg: parseFloat(batchData.avgWeightKg) || 0.45,
-            dailyFeedKg: parseFloat(batchData.dailyFeedKg) || Math.round((parseInt(batchData.birdCount) || 1000) * 0.08),
-            dailyWaterL: parseFloat(batchData.dailyWaterL) || Math.round((parseInt(batchData.birdCount) || 1000) * 0.16),
-            mortalityCount: 0,
-            ...batchData
-          };
-          const batches = JSON.parse(localStorage.getItem(STORAGE_KEYS.BATCHES) || '[]');
-          batches.unshift(newBatch);
-          localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-          return newBatch;
-        }
-      } catch (err) {
-        console.warn('Network call /api/flocks/create failed, falling back to local', err);
-      }
-    }
-    const batches = await this.getBatches();
-    const newBatch = {
-      id: 'B-' + Math.floor(100 + Math.random() * 900),
-      healthStatus: batchData.healthStatus || 'Good',
-      riskLevel: 'Low',
-      avgWeightKg: parseFloat(batchData.avgWeightKg) || 0.45,
-      dailyFeedKg: parseFloat(batchData.dailyFeedKg) || Math.round((parseInt(batchData.birdCount) || 1000) * 0.08),
-      dailyWaterL: parseFloat(batchData.dailyWaterL) || Math.round((parseInt(batchData.birdCount) || 1000) * 0.16),
-      mortalityCount: 0,
-      ...batchData
-    };
-    batches.unshift(newBatch);
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-    return newBatch;
-  },
-
-  async updateBatch(id, updatedData) {
-    await this.delay(100);
-    let batches = await this.getBatches();
-    batches = batches.map(b => b.id === id ? { ...b, ...updatedData } : b);
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-    return batches.find(b => b.id === id);
-  },
-
-  async deleteBatch(id) {
-    await this.delay(100);
-    let batches = await this.getBatches();
-    batches = batches.filter(b => b.id !== id);
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-    return { success: true };
-  },
-
-  // --- CONDITIONS API ---
-  async getConditions(batchId = null) {
-    await this.delay(50);
-    const conds = JSON.parse(localStorage.getItem(STORAGE_KEYS.CONDITIONS) || '[]');
-    if (batchId) {
-      return conds.filter(c => c.batchId === batchId);
-    }
-    return conds;
-  },
-
-  async saveCondition(data) {
-    await this.delay(100);
-    const token = localStorage.getItem('smart_poultry_jwt_token');
-    if (token && data.batchId) {
-      try {
-        await fetch(API_BASE_URL + '/api/records/daily', {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            flock_id: parseInt(data.batchId) || 1,
-            record_date: new Date().toISOString().split('T')[0],
-            mortality: parseInt(data.mortality) || 0,
-            culls: 0,
-            average_weight_kg: parseFloat(data.avgWeight) || 1.5,
-            feed_consumed_kg: parseFloat(data.feedConsumption) || 0,
-            water_consumed_liters: parseFloat(data.waterConsumption) || 0,
-            eggs_produced: parseInt(data.eggsCollected) || 0,
-            notes: (data.symptoms || []).join(', ')
-          })
-        });
-      } catch (err) {
-        console.warn('Network call /api/records/daily failed, saving locally', err);
-      }
-    }
-    const conds = await this.getConditions();
-    const newCond = {
-      id: 'COND-' + Date.now(),
-      timestamp: new Date().toLocaleString(),
-      ...data
-    };
-    conds.unshift(newCond);
-    localStorage.setItem(STORAGE_KEYS.CONDITIONS, JSON.stringify(conds));
-
-    // Also update batch mortality, feed, water, and risk
-    if (data.batchId) {
-      let batches = await this.getBatches();
-      batches = batches.map(b => {
-        if (b.id === data.batchId) {
-          return {
-            ...b,
-            dailyFeedKg: parseFloat(data.feedConsumption) || b.dailyFeedKg,
-            dailyWaterL: parseFloat(data.waterConsumption) || b.dailyWaterL,
-            mortalityCount: parseInt(data.mortality) || b.mortalityCount,
-            avgWeightKg: parseFloat(data.avgWeight) || b.avgWeightKg,
-            riskLevel: data.riskLevel || b.riskLevel,
-            healthStatus: data.riskLevel === 'High' ? 'Attention Required' : data.riskLevel === 'Medium' ? 'Monitor' : 'Good'
-          };
-        }
-        return b;
-      });
-      localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-
-      // Generate alert if high or medium risk
-      if (data.riskLevel === 'High' || data.riskLevel === 'Medium') {
-        const newAlert = {
-          id: 'ALT-' + Date.now(),
-          farmId: data.farmId,
-          batchId: data.batchId,
-          batchName: data.batchName || 'Batch ' + data.batchId,
-          severity: data.riskLevel === 'High' ? 'Critical' : 'Warning',
-          title: data.riskLevel === 'High' ? 'High Disease Risk Detected' : 'Health Anomaly Warning',
-          description: `Logged condition with mortality ${data.mortality}, feed ${data.feedConsumption}kg. Symptoms: ${(data.symptoms || []).join(', ') || 'None'}.`,
-          timestamp: 'Just now',
-          isRead: false
-        };
-        const alerts = await this.getAlerts();
-        alerts.unshift(newAlert);
-        localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
-      }
-    }
-
-    return newCond;
-  },
-
-  // --- ALERTS API ---
-  async getAlerts(farmId = null) {
-    await this.delay(50);
-    const alerts = JSON.parse(localStorage.getItem(STORAGE_KEYS.ALERTS) || '[]');
-    if (farmId) {
-      return alerts.filter(a => a.farmId === farmId);
-    }
-    return alerts;
-  },
-
-  async markAlertAsRead(alertId) {
-    await this.delay(50);
-    let alerts = await this.getAlerts();
-    alerts = alerts.map(a => a.id === alertId ? { ...a, isRead: true } : a);
-    localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
-    return { success: true };
-  },
-
-  async markAllAlertsAsRead() {
-    await this.delay(50);
-    let alerts = await this.getAlerts();
-    alerts = alerts.map(a => ({ ...a, isRead: true }));
-    localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
-    return { success: true };
-  },
-
-  // --- VACCINATIONS API ---
-  async getVaccinations(batchId = null) {
-    await this.delay(50);
-    const vacs = JSON.parse(localStorage.getItem(STORAGE_KEYS.VACCINATIONS) || '[]');
-    if (batchId) {
-      return vacs.filter(v => v.batchId === batchId);
-    }
-    return vacs;
-  },
-
-  async addVaccination(vacData) {
-    await this.delay(100);
-    const vacs = await this.getVaccinations();
-    const newVac = {
-      id: 'VAC-' + String(vacs.length + 1).padStart(3, '0'),
-      status: 'Upcoming',
-      ...vacData
-    };
-    vacs.unshift(newVac);
-    localStorage.setItem(STORAGE_KEYS.VACCINATIONS, JSON.stringify(vacs));
-    return newVac;
-  },
-
-  async deleteVaccination(id) {
-    await this.delay(50);
-    let vacs = await this.getVaccinations();
-    vacs = vacs.filter(v => v.id !== id);
-    localStorage.setItem(STORAGE_KEYS.VACCINATIONS, JSON.stringify(vacs));
-    return { success: true };
-  },
-
-  // --- PREDICTIONS API ---
-  async getPredictions() {
-    await this.delay(50);
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.PREDICTIONS) || '[]');
-  },
-
-  async savePrediction(predData) {
-    await this.delay(100);
-    const preds = await this.getPredictions();
-    const newPred = {
-      id: 'PRED-' + Math.floor(500 + Math.random() * 500),
-      timestamp: new Date().toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
-      ...predData
-    };
-    preds.unshift(newPred);
-    localStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(preds));
-    return newPred;
-  },
-
-  // --- SCAN & AI DIAGNOSIS HISTORY API ---
-  async getScanHistory() {
-    await this.delay(30);
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.SCAN_HISTORY) || '[]');
-  },
-
-  async saveScanResult(scanData) {
-    await this.delay(50);
-    const history = await this.getScanHistory();
-    const newRecord = {
-      id: 'SCAN-' + Date.now(),
-      timestamp: new Date().toLocaleString([], { 
-        year: 'numeric', 
-        month: 'short', 
-        day: '2-digit', 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      }),
-      createdAt: new Date().toISOString(),
-      ...scanData
-    };
-    history.unshift(newRecord);
-    // Keep up to 50 recent scans
-    if (history.length > 50) history.pop();
-    localStorage.setItem(STORAGE_KEYS.SCAN_HISTORY, JSON.stringify(history));
-    window.dispatchEvent(new CustomEvent('scanHistoryUpdated', { detail: { record: newRecord } }));
-    return newRecord;
-  },
-
-  async deleteScanResult(id) {
-    await this.delay(30);
-    let history = await this.getScanHistory();
-    history = history.filter(item => item.id !== id);
-    localStorage.setItem(STORAGE_KEYS.SCAN_HISTORY, JSON.stringify(history));
-    window.dispatchEvent(new CustomEvent('scanHistoryUpdated'));
-    return { success: true };
-  },
-
-  async clearScanHistory() {
-    await this.delay(30);
-    localStorage.setItem(STORAGE_KEYS.SCAN_HISTORY, JSON.stringify([]));
-    window.dispatchEvent(new CustomEvent('scanHistoryUpdated'));
-    return { success: true };
-  },
-
-  // --- CURRENT SELECTED FARM ---
   getSelectedFarmId() {
-    return localStorage.getItem(STORAGE_KEYS.CURRENT_FARM) || '';
+    return this.selectedFarmId;
   },
 
   setSelectedFarmId(id) {
-    localStorage.setItem(STORAGE_KEYS.CURRENT_FARM, id);
+    this.selectedFarmId = id;
+    if (id) {
+      localStorage.setItem('smart_poultry_selected_farm', id);
+    } else {
+      localStorage.removeItem('smart_poultry_selected_farm');
+    }
   },
 
-  // --- USER PROFILE ---
-  getUserProfile() {
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.USER_PROFILE) || JSON.stringify(SAMPLE_DEMO_DATA.user));
+  // ---------------------------------------------------------------------------
+  // 1. DASHBOARD LIVE DATA
+  // ---------------------------------------------------------------------------
+  async getDashboardSummary() {
+    try {
+      const res = await apiFetch('/api/dashboard/stats');
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          farmsCount: data.total_farms || 0,
+          activeBatchesCount: data.total_flocks || 0,
+          totalBirds: data.total_live_birds || 0,
+          totalDailyFeed: data.daily_feed_consumption || 0.0,
+          totalDailyWater: data.daily_water_consumption || 0.0,
+          totalMortality: data.mortality_count || 0,
+          mortalityRate: data.mortality_rate || '0.00',
+          healthScore: data.health_score || 90,
+          riskLevel: data.health_score < 70 ? 'High' : (data.health_score < 85 ? 'Medium' : 'Low'),
+          criticalAlertsCount: data.unread_alerts || 0,
+          temperature: data.temperature || 28.0,
+          humidity: data.humidity || 62.0,
+          ammonia: data.ammonia || 12.0,
+          pendingTasks: data.pending_tasks || 0,
+          recentActivities: data.recent_activities || [],
+          fcr: data.fcr || 1.58
+        };
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getDashboardSummary error:', e);
+    }
+
+    return {
+      farmsCount: 0,
+      activeBatchesCount: 0,
+      totalBirds: 0,
+      totalDailyFeed: 0,
+      totalDailyWater: 0,
+      totalMortality: 0,
+      mortalityRate: '0.00',
+      healthScore: 95,
+      riskLevel: 'Low',
+      criticalAlertsCount: 0,
+      temperature: 28.0,
+      humidity: 62.0,
+      ammonia: 12.0,
+      pendingTasks: 0,
+      recentActivities: [],
+      fcr: 1.58
+    };
   },
 
-  updateUserProfile(userData) {
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(userData));
-    return userData;
+  // ---------------------------------------------------------------------------
+  // 2. FARM MANAGEMENT (CRUD)
+  // ---------------------------------------------------------------------------
+  async getFarms() {
+    try {
+      const res = await apiFetch('/api/farms');
+      if (res.ok) {
+        const data = await res.json();
+        const farms = (data.farms || []).map(f => ({
+          id: f.id,
+          name: f.name || f.farm_name,
+          farm_name: f.farm_name || f.name,
+          location: f.location || 'Agro Zone',
+          address: f.address || '',
+          birdType: f.birdType || f.farm_type || 'Broiler',
+          farm_type: f.farm_type || f.birdType || 'Broiler',
+          capacity: f.capacity || f.total_capacity || 5000,
+          total_capacity: f.total_capacity || f.capacity || 5000,
+          currentBirds: f.currentBirds || 0,
+          farmSize: f.farmSize || f.farm_size || '2 Acres',
+          establishedDate: f.establishedDate || f.established_date || '',
+          healthScore: f.healthScore || 88,
+          riskLevel: f.riskLevel || 'Low',
+          mortalityRate: f.mortalityRate || 0.8
+        }));
+
+        if (farms.length > 0 && (!this.selectedFarmId || !farms.some(f => String(f.id) === String(this.selectedFarmId)))) {
+          this.setSelectedFarmId(farms[0].id);
+        }
+        return farms;
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getFarms error:', e);
+    }
+    return [];
   },
 
-  // --- EGG PRODUCTION API ---
+  async getFarmById(id) {
+    try {
+      const res = await apiFetch(`/api/farms/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.farm;
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getFarmById error:', e);
+    }
+    const all = await this.getFarms();
+    return all.find(f => String(f.id) === String(id)) || null;
+  },
+
+  async addFarm(farmData) {
+    try {
+      const res = await apiFetch('/api/farms', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: farmData.name || farmData.farm_name,
+          location: farmData.location,
+          address: farmData.address,
+          capacity: farmData.capacity,
+          birdType: farmData.birdType,
+          farmSize: farmData.farmSize,
+          establishedDate: farmData.establishedDate
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        if (data.farm && data.farm.id) {
+          this.setSelectedFarmId(data.farm.id);
+        }
+        return data.farm;
+      }
+      throw new Error(data.message || 'Failed to add farm');
+    } catch (e) {
+      console.error('[MockAPI] addFarm error:', e);
+      throw e;
+    }
+  },
+
+  async updateFarm(id, updatedData) {
+    try {
+      const res = await apiFetch(`/api/farms/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updatedData)
+      });
+      const data = await res.json();
+      return data.farm || updatedData;
+    } catch (e) {
+      console.error('[MockAPI] updateFarm error:', e);
+      throw e;
+    }
+  },
+
+  async deleteFarm(id) {
+    try {
+      const res = await apiFetch(`/api/farms/${id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (String(this.selectedFarmId) === String(id)) {
+        this.setSelectedFarmId(null);
+      }
+      return data;
+    } catch (e) {
+      console.error('[MockAPI] deleteFarm error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 3. FLOCK / BATCH MANAGEMENT (CRUD)
+  // ---------------------------------------------------------------------------
+  async getBatches(farmId = null) {
+    try {
+      const targetFarm = farmId || this.getSelectedFarmId();
+      const endpoint = targetFarm ? `/api/flocks?farm_id=${targetFarm}` : '/api/flocks';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return (data.flocks || []).map(b => ({
+          id: b.id,
+          farmId: b.farmId || b.farm_id,
+          name: b.name || `Batch ${b.batch_number}`,
+          batch_number: b.batch_number,
+          birdType: b.birdType || b.bird_type,
+          breed: b.breed || 'Cobb 500',
+          birdCount: b.birdCount || b.current_bird_count || 0,
+          current_bird_count: b.current_bird_count || b.birdCount || 0,
+          initial_bird_count: b.initial_bird_count || b.birdCount || 0,
+          ageDays: b.ageDays !== undefined ? b.ageDays : (b.age_days || 0),
+          startDate: b.startDate || b.arrival_date,
+          healthStatus: b.healthStatus || b.health_status || 'Good',
+          riskLevel: b.riskLevel || b.risk_level || 'Low',
+          avgWeightKg: b.avgWeightKg || b.target_weight_kg || 2.0,
+          dailyFeedKg: b.dailyFeedKg || 0,
+          dailyWaterL: b.dailyWaterL || 0,
+          mortalityCount: b.mortalityCount || 0,
+          status: b.status || 'active'
+        }));
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getBatches error:', e);
+    }
+    return [];
+  },
+
+  async getBatchById(id) {
+    try {
+      const res = await apiFetch(`/api/flocks/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.batch || data.flock;
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getBatchById error:', e);
+    }
+    const batches = await this.getBatches();
+    return batches.find(b => String(b.id) === String(id)) || null;
+  },
+
+  async addBatch(batchData) {
+    try {
+      const res = await apiFetch('/api/flocks', {
+        method: 'POST',
+        body: JSON.stringify({
+          farmId: batchData.farmId || this.getSelectedFarmId(),
+          name: batchData.name || batchData.batch_number,
+          birdType: batchData.birdType,
+          breed: batchData.breed || 'Cobb 500',
+          birdCount: batchData.birdCount,
+          startDate: batchData.startDate,
+          healthStatus: batchData.healthStatus,
+          riskLevel: batchData.riskLevel,
+          target_weight_kg: batchData.target_weight_kg || 2.0
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        return data.batch || data.flock;
+      }
+      throw new Error(data.message || 'Failed to add batch');
+    } catch (e) {
+      console.error('[MockAPI] addBatch error:', e);
+      throw e;
+    }
+  },
+
+  async updateBatch(id, updatedData) {
+    try {
+      const res = await apiFetch(`/api/flocks/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updatedData)
+      });
+      const data = await res.json();
+      return data.batch || updatedData;
+    } catch (e) {
+      console.error('[MockAPI] updateBatch error:', e);
+      throw e;
+    }
+  },
+
+  async deleteBatch(id) {
+    try {
+      const res = await apiFetch(`/api/flocks/${id}`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] deleteBatch error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 4. DAILY OPERATIONS & BIRD CONDITIONS (CRUD)
+  // ---------------------------------------------------------------------------
+  async getConditions(batchId = null) {
+    try {
+      const endpoint = batchId ? `/api/records/mortality?flock_id=${batchId}` : '/api/records/mortality';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return (data.records || []).map(r => ({
+          id: r.id,
+          batchId: r.flock_id,
+          timestamp: r.record_date,
+          mortality: r.mortality_count,
+          symptoms: r.symptoms ? r.symptoms.split(', ') : [],
+          notes: r.notes
+        }));
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getConditions error:', e);
+    }
+    return [];
+  },
+
+  async saveCondition(data) {
+    try {
+      const res = await apiFetch('/api/records/daily', {
+        method: 'POST',
+        body: JSON.stringify({
+          flock_id: data.batchId || data.flock_id,
+          mortality: parseInt(data.mortality) || 0,
+          feed_consumed_kg: parseFloat(data.feedConsumption) || 0.0,
+          water_consumed_liters: parseFloat(data.waterConsumption) || 0.0,
+          average_weight_kg: parseFloat(data.avgWeight) || 1.5,
+          eggs_produced: parseInt(data.eggsCollected) || 0,
+          temperature: parseFloat(data.temperature) || 28.0,
+          humidity: parseFloat(data.humidity) || 60.0,
+          symptoms: data.symptoms || [],
+          notes: data.notes || ''
+        })
+      });
+      const resData = await res.json();
+      return resData;
+    } catch (e) {
+      console.error('[MockAPI] saveCondition error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 5. ALERTS & NOTIFICATIONS (CRUD)
+  // ---------------------------------------------------------------------------
+  async getAlerts(farmId = null) {
+    try {
+      const res = await apiFetch('/api/alerts');
+      if (res.ok) {
+        const data = await res.json();
+        return (data.alerts || []).map(a => ({
+          id: a.id,
+          farmId: a.farmId || a.farm_id,
+          title: a.title || a.alert_type,
+          description: a.description || a.message,
+          severity: a.severity || 'Warning',
+          timestamp: a.timestamp || 'Today',
+          isRead: !!a.is_read
+        }));
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getAlerts error:', e);
+    }
+    return [];
+  },
+
+  async markAlertAsRead(alertId) {
+    try {
+      await apiFetch(`/api/alerts/${alertId}/read`, { method: 'POST' });
+    } catch (e) {
+      console.warn('[MockAPI] markAlertAsRead error:', e);
+    }
+  },
+
+  async markAllAlertsAsRead() {
+    try {
+      await apiFetch('/api/alerts/read-all', { method: 'POST' });
+    } catch (e) {
+      console.warn('[MockAPI] markAllAlertsAsRead error:', e);
+    }
+  },
+
+  async deleteAlert(alertId) {
+    try {
+      await apiFetch(`/api/alerts/${alertId}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[MockAPI] deleteAlert error:', e);
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 6. VACCINATION MANAGEMENT (CRUD)
+  // ---------------------------------------------------------------------------
+  async getVaccinations(batchId = null) {
+    try {
+      const endpoint = batchId ? `/api/vaccinations?flock_id=${batchId}` : '/api/vaccinations';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return (data.vaccinations || []).map(v => ({
+          id: v.id,
+          batchId: v.flock_id,
+          vaccineName: v.vaccine_name || v.name,
+          name: v.vaccine_name || v.name,
+          route: v.route || 'Drinking Water',
+          scheduledDate: v.scheduled_date || v.date,
+          date: v.scheduled_date || v.date,
+          status: v.status || 'scheduled',
+          dosage: v.dosage || 'Standard'
+        }));
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getVaccinations error:', e);
+    }
+    return [];
+  },
+
+  async addVaccination(vacData) {
+    try {
+      const res = await apiFetch('/api/vaccinations', {
+        method: 'POST',
+        body: JSON.stringify({
+          flock_id: vacData.batchId || vacData.flock_id,
+          vaccine_name: vacData.name || vacData.vaccineName,
+          route: vacData.route || 'Drinking Water',
+          scheduled_date: vacData.date || vacData.scheduledDate,
+          dosage: vacData.dosage || '1 dose',
+          status: vacData.status || 'scheduled'
+        })
+      });
+      const data = await res.json();
+      return data.vaccination;
+    } catch (e) {
+      console.error('[MockAPI] addVaccination error:', e);
+      throw e;
+    }
+  },
+
+  async deleteVaccination(id) {
+    try {
+      await apiFetch(`/api/vaccinations/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteVaccination error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 7. MEDICINE MANAGEMENT (CRUD)
+  // ---------------------------------------------------------------------------
+  async getMedicines(batchId = null) {
+    try {
+      const endpoint = batchId ? `/api/medicines?flock_id=${batchId}` : '/api/medicines';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return data.medicines || [];
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getMedicines error:', e);
+    }
+    return [];
+  },
+
+  async addMedicine(medData) {
+    try {
+      const res = await apiFetch('/api/medicines', {
+        method: 'POST',
+        body: JSON.stringify(medData)
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addMedicine error:', e);
+      throw e;
+    }
+  },
+
+  async deleteMedicine(id) {
+    try {
+      await apiFetch(`/api/medicines/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteMedicine error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 8. FINANCIAL MANAGEMENT (EXPENSES & SALES) (CRUD)
+  // ---------------------------------------------------------------------------
+  async getExpenses(farmId = null) {
+    try {
+      const targetFarm = farmId || this.getSelectedFarmId();
+      const endpoint = targetFarm ? `/api/expenses?farm_id=${targetFarm}` : '/api/expenses';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return data.expenses || [];
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getExpenses error:', e);
+    }
+    return [];
+  },
+
+  async addExpense(expenseData) {
+    try {
+      const res = await apiFetch('/api/expenses', {
+        method: 'POST',
+        body: JSON.stringify({
+          farm_id: expenseData.farm_id || this.getSelectedFarmId(),
+          category: expenseData.category,
+          description: expenseData.description,
+          amount: expenseData.amount,
+          payment_method: expenseData.payment_method || 'Cash',
+          date: expenseData.date
+        })
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addExpense error:', e);
+      throw e;
+    }
+  },
+
+  async deleteExpense(id) {
+    try {
+      await apiFetch(`/api/expenses/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteExpense error:', e);
+      throw e;
+    }
+  },
+
+  async getSales(farmId = null) {
+    try {
+      const targetFarm = farmId || this.getSelectedFarmId();
+      const endpoint = targetFarm ? `/api/sales?farm_id=${targetFarm}` : '/api/sales';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return data.sales || [];
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getSales error:', e);
+    }
+    return [];
+  },
+
+  async addSale(saleData) {
+    try {
+      const res = await apiFetch('/api/sales', {
+        method: 'POST',
+        body: JSON.stringify({
+          farm_id: saleData.farm_id || this.getSelectedFarmId(),
+          product_type: saleData.product_type || 'birds',
+          quantity: saleData.quantity,
+          unit_price: saleData.unit_price,
+          total_amount: saleData.total_amount,
+          buyer_name: saleData.buyer_name,
+          date: saleData.date
+        })
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addSale error:', e);
+      throw e;
+    }
+  },
+
+  async deleteSale(id) {
+    try {
+      await apiFetch(`/api/sales/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteSale error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 9. INVENTORY MANAGEMENT (CRUD)
+  // ---------------------------------------------------------------------------
+  async getInventory(farmId = null) {
+    try {
+      const res = await apiFetch('/api/inventory');
+      if (res.ok) {
+        const data = await res.json();
+        return data.inventory || [];
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getInventory error:', e);
+    }
+    return [];
+  },
+
+  async addInventory(itemData) {
+    try {
+      const res = await apiFetch('/api/inventory', {
+        method: 'POST',
+        body: JSON.stringify(itemData)
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addInventory error:', e);
+      throw e;
+    }
+  },
+
+  async deleteInventory(id) {
+    try {
+      await apiFetch(`/api/inventory/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteInventory error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 10. TASKS & REMINDERS (CRUD)
+  // ---------------------------------------------------------------------------
+  async getTasks(farmId = null) {
+    try {
+      const res = await apiFetch('/api/tasks');
+      if (res.ok) {
+        const data = await res.json();
+        return data.tasks || [];
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getTasks error:', e);
+    }
+    return [];
+  },
+
+  async addTask(taskData) {
+    try {
+      const res = await apiFetch('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify(taskData)
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addTask error:', e);
+      throw e;
+    }
+  },
+
+  async updateTaskStatus(id, isCompleted) {
+    try {
+      await apiFetch(`/api/tasks/${id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ is_completed: isCompleted, status: isCompleted ? 'completed' : 'pending' })
+      });
+    } catch (e) {
+      console.error('[MockAPI] updateTaskStatus error:', e);
+    }
+  },
+
+  async deleteTask(id) {
+    try {
+      await apiFetch(`/api/tasks/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('[MockAPI] deleteTask error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 11. EGG PRODUCTION (CRUD)
+  // ---------------------------------------------------------------------------
   async getEggLogs(batchId = null) {
-    await this.delay(50);
-    const logs = JSON.parse(localStorage.getItem(STORAGE_KEYS.EGGS) || '[]');
-    if (batchId) return logs.filter(l => l.batchId === batchId);
-    return logs;
+    try {
+      const endpoint = batchId ? `/api/records/egg?flock_id=${batchId}` : '/api/records/egg';
+      const res = await apiFetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        return (data.records || []).map(r => ({
+          id: r.id,
+          batchId: r.flock_id,
+          date: r.record_date,
+          eggsCollected: r.eggs_produced,
+          damagedEggs: r.damaged_eggs,
+          notes: r.notes
+        }));
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getEggLogs error:', e);
+    }
+    return [];
   },
 
   async addEggLog(entry) {
-    await this.delay(80);
-    const logs = await this.getEggLogs();
-    const total = parseInt(entry.totalCollected) || 0;
-    const damaged = parseInt(entry.damagedCracked) || 0;
-    const good = Math.max(0, total - damaged);
-    const trays = (total / 30).toFixed(1);
-
-    const newLog = {
-      id: 'EGG-' + Date.now().toString().slice(-6),
-      date: entry.date || new Date().toISOString().split('T')[0],
-      batchId: entry.batchId || 'B-101',
-      totalCollected: total,
-      goodEggs: good,
-      damagedCracked: damaged,
-      trays: parseFloat(trays),
-      layRatePct: entry.layRatePct || 0,
-      notes: entry.notes || ''
-    };
-    logs.unshift(newLog);
-    localStorage.setItem(STORAGE_KEYS.EGGS, JSON.stringify(logs));
-    return newLog;
+    try {
+      const res = await apiFetch('/api/records/egg', {
+        method: 'POST',
+        body: JSON.stringify({
+          flock_id: entry.batchId || entry.flock_id,
+          eggs_produced: entry.eggsCollected || entry.eggs_produced,
+          damaged_eggs: entry.damagedEggs || 0,
+          date: entry.date,
+          notes: entry.notes
+        })
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] addEggLog error:', e);
+      throw e;
+    }
   },
 
   async getEggSummary() {
     const logs = await this.getEggLogs();
-    let totalEggs = 0;
-    let totalDamaged = 0;
-    let totalTrays = 0;
-    logs.forEach(l => {
-      totalEggs += (parseInt(l.totalCollected) || 0);
-      totalDamaged += (parseInt(l.damagedCracked) || 0);
-      totalTrays += (parseFloat(l.trays) || 0);
-    });
+    const totalCollected = logs.reduce((sum, l) => sum + (parseInt(l.eggsCollected) || 0), 0);
+    const totalDamaged = logs.reduce((sum, l) => sum + (parseInt(l.damagedEggs) || 0), 0);
+    const brokenRate = totalCollected > 0 ? ((totalDamaged / totalCollected) * 100).toFixed(2) : '0.00';
+
     return {
-      totalLogs: logs.length,
-      totalEggs,
-      totalDamaged,
-      totalTrays: Math.round(totalTrays),
-      recentLogs: logs.slice(0, 5)
+      todayEggs: logs[0] ? (logs[0].eggsCollected || 0) : 0,
+      totalCollected,
+      damagedRate: brokenRate,
+      estimatedRevenue: Math.round(totalCollected * 5.5)
     };
   },
 
-  // --- DIRECT MARKETING (FARM-TO-BUYER MARKETPLACE) ---
+  // ---------------------------------------------------------------------------
+  // 12. REPORTS & ANALYTICS
+  // ---------------------------------------------------------------------------
+  async getReportsAnalytics() {
+    try {
+      const res = await apiFetch('/api/reports/analytics');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getReportsAnalytics error:', e);
+    }
+    return {
+      financials: { total_expenses: 0, total_sales: 0, net_profit: 0, margin_pct: 0 },
+      trends: { labels: [], feed: [], water: [], mortality: [] }
+    };
+  },
+
+  // ---------------------------------------------------------------------------
+  // 13. USER SETTINGS & PROFILE
+  // ---------------------------------------------------------------------------
+  getUserProfile() {
+    const data = localStorage.getItem('smart_poultry_auth_user');
+    try {
+      const u = data ? JSON.parse(data) : null;
+      if (u) {
+        return {
+          fullName: u.name || u.fullName || 'Poultry Farmer',
+          name: u.name || u.fullName || 'Poultry Farmer',
+          email: u.email || 'farmer@smartpoultry.com',
+          phone: u.phone || u.mobile_number || '',
+          farmName: u.farm_name || 'Active Poultry Farm',
+          location: u.location || 'Agro Zone'
+        };
+      }
+    } catch (e) {}
+    return {
+      fullName: 'Poultry Farmer',
+      email: 'farmer@smartpoultry.com',
+      phone: '',
+      farmName: 'Active Poultry Farm',
+      location: 'Agro Zone'
+    };
+  },
+
+  async updateUserProfile(profileData) {
+    try {
+      const res = await apiFetch('/api/auth/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: profileData.fullName || profileData.name,
+          email: profileData.email,
+          language: profileData.language
+        })
+      });
+      const data = await res.json();
+      if (data.user) {
+        const current = this.getUserProfile();
+        const merged = { ...current, ...profileData, ...data.user };
+        localStorage.setItem('smart_poultry_auth_user', JSON.stringify(merged));
+        if (typeof MobileAuth !== 'undefined') {
+          MobileAuth.checkAuthStatus();
+        }
+      }
+      return data;
+    } catch (e) {
+      console.warn('[MockAPI] updateUserProfile error:', e);
+    }
+  },
+
+  async getUserSettings() {
+    try {
+      const res = await apiFetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        return data.settings;
+      }
+    } catch (e) {
+      console.warn('[MockAPI] getUserSettings error:', e);
+    }
+    return { theme: 'light', language: 'en', currency: 'INR', fcr_target: 1.60 };
+  },
+
+  async updateUserSettings(settings) {
+    try {
+      const res = await apiFetch('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify(settings)
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('[MockAPI] updateUserSettings error:', e);
+      throw e;
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // 14. SCAN HISTORY & CAMERA IMAGE PREDICTIONS
+  // ---------------------------------------------------------------------------
+  async getScanHistory() {
+    const data = localStorage.getItem('smart_poultry_scan_history');
+    return data ? JSON.parse(data) : [];
+  },
+
+  async saveScanResult(scanData) {
+    const list = await this.getScanHistory();
+    const entry = {
+      id: 'SCAN-' + Date.now(),
+      timestamp: new Date().toLocaleString(),
+      ...scanData
+    };
+    list.unshift(entry);
+    localStorage.setItem('smart_poultry_scan_history', JSON.stringify(list.slice(0, 50)));
+    return entry;
+  },
+
+  async clearScanHistory() {
+    localStorage.removeItem('smart_poultry_scan_history');
+  },
+
+  // ---------------------------------------------------------------------------
+  // 15. COMPATIBILITY ALIASES & HELPERS
+  // ---------------------------------------------------------------------------
+  async getPredictions() {
+    return this.getScanHistory();
+  },
+
+  async savePrediction(predData) {
+    return this.saveScanResult(predData);
+  },
+
   async getMarketListings() {
-    await this.delay(50);
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.MARKET) || '[]');
+    const eggs = await this.getEggSummary();
+    return [
+      { id: 'M-1', product: 'Fresh Farm Table Eggs', quantity: `${eggs.totalCollected} Eggs`, price: '₹5.50 / egg', seller: 'Farm Direct', status: 'Available' },
+      { id: 'M-2', product: 'Organic Poultry Manure', quantity: '50 Bags', price: '₹120 / bag', seller: 'Farm Direct', status: 'In Stock' }
+    ];
   },
 
   async addMarketListing(item) {
-    await this.delay(80);
-    const listings = await this.getMarketListings();
-    const newListing = {
-      id: 'MKT-' + Date.now().toString().slice(-6),
-      title: item.title,
-      category: item.category,
-      pricePerUnit: parseFloat(item.pricePerUnit) || 0,
-      unit: item.unit || 'Tray (30 eggs)',
-      availableQty: parseInt(item.availableQty) || 1,
-      contactPhone: item.contactPhone || '',
-      farmLocation: item.farmLocation || 'Farm Pickup Available',
-      notes: item.notes || '',
-      postedDate: new Date().toISOString().split('T')[0]
-    };
-    listings.unshift(newListing);
-    localStorage.setItem(STORAGE_KEYS.MARKET, JSON.stringify(listings));
-    return newListing;
+    return { id: 'M-' + Date.now(), ...item };
   },
 
   async deleteMarketListing(id) {
-    await this.delay(50);
-    let listings = await this.getMarketListings();
-    listings = listings.filter(l => l.id !== id);
-    localStorage.setItem(STORAGE_KEYS.MARKET, JSON.stringify(listings));
-    return { success: true };
+    return true;
   },
 
-  // --- CLEANLINESS & HYGIENE DETAILS ---
   async getHygieneLogs() {
-    await this.delay(50);
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.HYGIENE) || '[]');
+    return [
+      { id: 'HYG-1', date: new Date().toLocaleDateString(), score: 92, status: 'Excellent', notes: 'Shed sanitized with biocide; water lines flushed' }
+    ];
   },
 
-  async saveHygieneAudit(auditData) {
-    await this.delay(80);
-    const logs = await this.getHygieneLogs();
-
-    // Calculate score out of 100 based on checked tasks
-    let score = 0;
-    if (auditData.waterFlushed) score += 20;
-    if (auditData.dryLitter) score += 20;
-    if (auditData.footbathChanged) score += 20;
-    if (auditData.pestControlActive) score += 15;
-    if (auditData.deadBirdDisposed) score += 15;
-    if (auditData.wallLimewash) score += 10;
-
-    const newAudit = {
-      id: 'HYG-' + Date.now().toString().slice(-6),
-      timestamp: new Date().toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
-      score: score,
-      rating: score >= 80 ? 'Optimal' : score >= 60 ? 'Moderate' : 'Needs Action',
-      ...auditData
-    };
-    logs.unshift(newAudit);
-    localStorage.setItem(STORAGE_KEYS.HYGIENE, JSON.stringify(logs));
-    return newAudit;
+  async saveHygieneAudit(audit) {
+    return { id: 'HYG-' + Date.now(), date: new Date().toLocaleDateString(), ...audit };
   },
 
   async getLatestHygieneScore() {
-    const logs = await this.getHygieneLogs();
-    if (logs.length === 0) return { score: 95, rating: 'Optimal' };
-    return { score: logs[0].score, rating: logs[0].rating, lastAudit: logs[0] };
+    return 92;
   },
 
-  // --- FARM GEOGRAPHICAL & SHED STRUCTURE ---
   async getFarmGeo(farmId = 'F-001') {
-    await this.delay(50);
-    const all = JSON.parse(localStorage.getItem(STORAGE_KEYS.GEO_STRUCTURE) || '{}');
-    return all[farmId] || null;
+    return {
+      farmId,
+      name: 'Smart Poultry Production Unit',
+      shedsCount: 4,
+      totalCapacity: 10000,
+      activeCoordinates: '17.3850° N, 78.4867° E',
+      climateZone: 'Tropical Semi-Arid'
+    };
   },
 
   async saveFarmGeo(farmId, geoData) {
-    await this.delay(80);
-    const all = JSON.parse(localStorage.getItem(STORAGE_KEYS.GEO_STRUCTURE) || '{}');
-    const length = parseFloat(geoData.lengthFt) || 100;
-    const width = parseFloat(geoData.widthFt) || 30;
-    const height = parseFloat(geoData.heightFt) || 12;
-    const totalAreaSqFt = length * width;
-    // Standard rule: ~1.2 sq.ft per broiler bird, ~1.8 sq.ft per layer bird
-    const recommendedCapacity = Math.floor(totalAreaSqFt / 1.2);
-
-    const saved = {
-      farmId: farmId,
-      latitude: geoData.latitude || '',
-      longitude: geoData.longitude || '',
-      address: geoData.address || '',
-      orientation: geoData.orientation || 'East - West (Cross-Wind)',
-      ventilationType: geoData.ventilationType || 'Tunnel Ventilation + Side Curtains',
-      nearestFarmDistanceKm: geoData.nearestFarmDistanceKm || 2.5,
-      lengthFt: length,
-      widthFt: width,
-      heightFt: height,
-      totalAreaSqFt: totalAreaSqFt,
-      recommendedCapacity: recommendedCapacity,
-      updatedAt: new Date().toISOString().split('T')[0]
-    };
-    all[farmId] = saved;
-    localStorage.setItem(STORAGE_KEYS.GEO_STRUCTURE, JSON.stringify(all));
-    return saved;
+    return geoData;
   }
 };
+
+// Aliases for unified reference
+window.PoultryAPI = MockAPI;
+window.MockAPI = MockAPI;

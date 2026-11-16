@@ -154,18 +154,31 @@ def init_db(clean=False):
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS farms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
+        user_id INTEGER,
         owner_id INTEGER,
         farm_name TEXT NOT NULL,
         location TEXT,
         address TEXT,
-        total_capacity INTEGER DEFAULT 0,
+        total_capacity INTEGER DEFAULT 5000,
         farm_type TEXT DEFAULT 'Broiler',
+        farm_size TEXT DEFAULT '2 Acres',
+        established_date DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
     );
     """)
+
+    # Try adding columns if table was created earlier without them
+    for col_def in [
+        ("farm_size", "TEXT DEFAULT '2 Acres'"),
+        ("established_date", "DATE"),
+        ("owner_id", "INTEGER")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE farms ADD COLUMN {col_def[0]} {col_def[1]};")
+        except Exception:
+            pass
 
     # 4. Sheds Table
     cursor.execute("""
@@ -186,18 +199,20 @@ def init_db(clean=False):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         farm_id INTEGER NOT NULL,
         shed_id INTEGER,
-        batch_code TEXT NOT NULL,
+        batch_code TEXT,
         batch_number TEXT,
         bird_type TEXT DEFAULT 'Broiler',
-        breed TEXT NOT NULL,
-        initial_birds INTEGER NOT NULL,
-        current_birds INTEGER NOT NULL,
-        initial_bird_count INTEGER,
-        current_bird_count INTEGER,
+        breed TEXT NOT NULL DEFAULT 'Cobb 500',
+        initial_birds INTEGER DEFAULT 1000,
+        current_birds INTEGER DEFAULT 1000,
+        initial_bird_count INTEGER DEFAULT 1000,
+        current_bird_count INTEGER DEFAULT 1000,
         arrival_date DATE NOT NULL,
         expected_sale_date DATE,
         target_weight_kg REAL DEFAULT 2.0,
         status TEXT DEFAULT 'active',
+        health_status TEXT DEFAULT 'Good',
+        risk_level TEXT DEFAULT 'Low',
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -205,6 +220,18 @@ def init_db(clean=False):
         FOREIGN KEY (shed_id) REFERENCES sheds(id) ON DELETE SET NULL
     );
     """)
+
+    for col_def in [
+        ("health_status", "TEXT DEFAULT 'Good'"),
+        ("risk_level", "TEXT DEFAULT 'Low'"),
+        ("batch_number", "TEXT"),
+        ("initial_bird_count", "INTEGER DEFAULT 1000"),
+        ("current_bird_count", "INTEGER DEFAULT 1000")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE flocks ADD COLUMN {col_def[0]} {col_def[1]};")
+        except Exception:
+            pass
 
     # 6. Daily Operations Logs / Daily Records
     cursor.execute("""
@@ -255,6 +282,7 @@ def init_db(clean=False):
     CREATE TABLE IF NOT EXISTS feed_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         flock_id INTEGER NOT NULL,
+        farm_id INTEGER NOT NULL DEFAULT 1,
         record_date DATE NOT NULL,
         feed_type TEXT NOT NULL,
         quantity_kg REAL NOT NULL,
@@ -263,24 +291,37 @@ def init_db(clean=False):
         supplier TEXT,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (flock_id) REFERENCES flocks(id) ON DELETE CASCADE
+        FOREIGN KEY (flock_id) REFERENCES flocks(id) ON DELETE CASCADE,
+        FOREIGN KEY (farm_id) REFERENCES farms(id) ON DELETE CASCADE
     );
     """)
+
+    try:
+        cursor.execute("ALTER TABLE feed_records ADD COLUMN farm_id INTEGER DEFAULT 1;")
+    except Exception:
+        pass
 
     # 9. Egg Records
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS egg_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         flock_id INTEGER NOT NULL,
+        farm_id INTEGER NOT NULL DEFAULT 1,
         record_date DATE NOT NULL,
         eggs_produced INTEGER DEFAULT 0,
         eggs_sold INTEGER DEFAULT 0,
         damaged_eggs INTEGER DEFAULT 0,
         selling_price_per_egg REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (flock_id) REFERENCES flocks(id) ON DELETE CASCADE
+        FOREIGN KEY (flock_id) REFERENCES flocks(id) ON DELETE CASCADE,
+        FOREIGN KEY (farm_id) REFERENCES farms(id) ON DELETE CASCADE
     );
     """)
+
+    try:
+        cursor.execute("ALTER TABLE egg_records ADD COLUMN farm_id INTEGER DEFAULT 1;")
+    except Exception:
+        pass
 
     # 10. Environment Records / Sensor Readings
     cursor.execute("""
@@ -292,11 +333,24 @@ def init_db(clean=False):
         temperature_celsius REAL NOT NULL,
         humidity_percentage REAL NOT NULL,
         ammonia_ppm REAL DEFAULT 0.0,
+        water_level_pct REAL DEFAULT 100.0,
+        feed_level_pct REAL DEFAULT 100.0,
+        source TEXT DEFAULT 'IoT_Sensor',
         notes TEXT,
         FOREIGN KEY (farm_id) REFERENCES farms(id) ON DELETE CASCADE,
         FOREIGN KEY (flock_id) REFERENCES flocks(id) ON DELETE SET NULL
     );
     """)
+
+    for col_def in [
+        ("water_level_pct", "REAL DEFAULT 100.0"),
+        ("feed_level_pct", "REAL DEFAULT 100.0"),
+        ("source", "TEXT DEFAULT 'IoT_Sensor'")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE environment_records ADD COLUMN {col_def[0]} {col_def[1]};")
+        except Exception:
+            pass
 
     # 11. Sensor Readings (IoT Legacy)
     cursor.execute("""
